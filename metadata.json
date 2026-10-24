@@ -1,0 +1,6 @@
+{
+  "name": "SpotlightLive — Synchronized Live Audience Voting",
+  "description": "Minimal synchronized 5-star live audience voting platform for Day One Standup Comedy with admin creation, contestant-by-contestant voting control, public voter links, and final reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
