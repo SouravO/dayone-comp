@@ -115,25 +115,29 @@ export async function fetchAdminReport(eventId: string): Promise<AdminReport> {
   return res.json();
 }
 
-// WebSocket real-time synchronization hook
+// WebSocket real-time synchronization hook with automatic polling fallback
 export function useLiveVoterEvent(eventId: string) {
   const [state, setState] = useState<VoterEventState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const pollTimerRef = useRef<any>(null);
 
-  const fetchInitial = useCallback(async () => {
+  const fetchCurrent = useCallback(async () => {
     if (!eventId) return;
     try {
       const data = await fetchPublicEvent(eventId);
       setState(data);
       setError(null);
     } catch (err: any) {
-      setError(err.message);
+      // Don't overwrite state with error if we already have data
+      if (!state) {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
-  }, [eventId]);
+  }, [eventId, state]);
 
   useEffect(() => {
     if (!eventId) {
@@ -143,53 +147,59 @@ export function useLiveVoterEvent(eventId: string) {
     }
 
     setLoading(true);
-    fetchInitial();
+    fetchCurrent();
 
-    // Establish WebSocket connection
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${window.location.host}/ws`;
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
+    // Polling fallback every 1.5 seconds (vital for Vercel serverless where WebSockets don't stay open)
+    pollTimerRef.current = setInterval(() => {
+      fetchCurrent();
+    }, 1500);
 
-    socket.onopen = () => {
-      // Subscribe to this event's real-time stream
-      socket.send(JSON.stringify({ type: 'SUBSCRIBE', eventId }));
-    };
+    // Attempt WebSocket connection for real-time pushing when running with a persistent server
+    let socket: WebSocket | null = null;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/ws`;
+      socket = new WebSocket(wsUrl);
+      wsRef.current = socket;
 
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'STATE_UPDATE' && msg.data) {
-          setState(msg.data);
-          setLoading(false);
+      socket.onopen = () => {
+        socket?.send(JSON.stringify({ type: 'SUBSCRIBE', eventId }));
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'STATE_UPDATE' && msg.data) {
+            setState(msg.data);
+            setLoading(false);
+          }
+        } catch {
+          // ignore parse error
         }
-      } catch (e) {
-        console.warn('WS parse error', e);
-      }
-    };
+      };
 
-    socket.onerror = (e) => {
-      console.warn('WS error', e);
-    };
+      socket.onerror = () => {
+        // Expected on Vercel serverless; polling handles updates smoothly
+      };
 
-    // Reconnection handling
-    socket.onclose = () => {
-      // Fallback: poll once after close if needed
-    };
-
-    // Heartbeat ping
-    const interval = setInterval(() => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'PING' }));
-      }
-    }, 20000);
+      socket.onclose = () => {
+        // Expected on Vercel serverless; polling handles updates smoothly
+      };
+    } catch {
+      // Ignore ws initialization error on environments without WS
+    }
 
     return () => {
-      clearInterval(interval);
-      socket.close();
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      if (socket) {
+        socket.close();
+      }
       wsRef.current = null;
     };
-  }, [eventId, fetchInitial]);
+  }, [eventId, fetchCurrent]);
 
-  return { state, loading, error, refresh: fetchInitial };
+  return { state, loading, error, refresh: fetchCurrent };
 }

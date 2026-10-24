@@ -109,6 +109,12 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   useEffect(() => {
     loadAllEvents();
     loadEventState();
+
+    const interval = setInterval(() => {
+      loadEventState();
+    }, 2000);
+
+    return () => clearInterval(interval);
   }, [currentEventId]);
 
   useEffect(() => {
